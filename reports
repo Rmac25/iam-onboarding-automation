@@ -1,0 +1,119 @@
+<#
+Project: IAM Onboarding Automation
+Purpose: Create Entra ID users from CSV, assign groups, and prepare license assignment.
+Required Module: Microsoft.Graph
+#>
+
+param(
+    [string]$CsvPath = "../sample-data/new-users.csv",
+    [string]$ReportPath = "../reports/onboarding-report.csv"
+)
+
+# Install if needed:
+# Install-Module Microsoft.Graph -Scope CurrentUser
+
+Connect-MgGraph -Scopes `
+    "User.ReadWrite.All",
+    "Group.ReadWrite.All",
+    "Directory.ReadWrite.All",
+    "Organization.Read.All"
+
+$Users = Import-Csv $CsvPath
+$Results = @()
+
+# Department-to-group mapping
+$DepartmentGroups = @{
+    "IT" = "IAM-Lab-IT-Users"
+    "HR" = "IAM-Lab-HR-Users"
+    "Finance" = "IAM-Lab-Finance-Users"
+    "Security" = "IAM-Lab-Security-Users"
+}
+
+foreach ($User in $Users) {
+    try {
+        Write-Host "Processing $($User.FirstName) $($User.LastName)..." -ForegroundColor Cyan
+
+        $DisplayName = "$($User.FirstName) $($User.LastName)"
+        $MailNickname = "$($User.FirstName).$($User.LastName)".ToLower()
+        $TempPassword = "TempP@ssw0rd!" + (Get-Random -Minimum 1000 -Maximum 9999)
+
+        $ExistingUser = Get-MgUser -Filter "userPrincipalName eq '$($User.UserPrincipalName)'" -ErrorAction SilentlyContinue
+
+        if ($ExistingUser) {
+            Write-Host "User already exists: $($User.UserPrincipalName)" -ForegroundColor Yellow
+            $CreatedUser = $ExistingUser
+            $Status = "Already Exists"
+        }
+        else {
+            $PasswordProfile = @{
+                Password = $TempPassword
+                ForceChangePasswordNextSignIn = $true
+            }
+
+            $CreatedUser = New-MgUser `
+                -AccountEnabled `
+                -DisplayName $DisplayName `
+                -MailNickname $MailNickname `
+                -UserPrincipalName $User.UserPrincipalName `
+                -PasswordProfile $PasswordProfile `
+                -Department $User.Department `
+                -JobTitle $User.JobTitle `
+                -OfficeLocation $User.Location
+
+            Write-Host "Created user: $DisplayName" -ForegroundColor Green
+            $Status = "Created"
+        }
+
+        if ($DepartmentGroups.ContainsKey($User.Department)) {
+            $GroupName = $DepartmentGroups[$User.Department]
+            $Group = Get-MgGroup -Filter "displayName eq '$GroupName'" -ErrorAction SilentlyContinue
+
+            if ($Group) {
+                New-MgGroupMember `
+                    -GroupId $Group.Id `
+                    -DirectoryObjectId $CreatedUser.Id `
+                    -ErrorAction SilentlyContinue
+
+                Write-Host "Added to group: $GroupName" -ForegroundColor Green
+            }
+            else {
+                Write-Host "Group not found: $GroupName" -ForegroundColor Yellow
+            }
+        }
+
+        $Results += [PSCustomObject]@{
+            DisplayName       = $DisplayName
+            UserPrincipalName = $User.UserPrincipalName
+            Department        = $User.Department
+            JobTitle          = $User.JobTitle
+            Location          = $User.Location
+            Status            = $Status
+            DateProcessed     = Get-Date
+        }
+    }
+    catch {
+        Write-Host "Error processing $($User.UserPrincipalName): $($_.Exception.Message)" -ForegroundColor Red
+
+        $Results += [PSCustomObject]@{
+            DisplayName       = "$($User.FirstName) $($User.LastName)"
+            UserPrincipalName = $User.UserPrincipalName
+            Department        = $User.Department
+            JobTitle          = $User.JobTitle
+            Location          = $User.Location
+            Status            = "Failed: $($_.Exception.Message)"
+            DateProcessed     = Get-Date
+        }
+    }
+}
+
+$ReportFolder = Split-Path $ReportPath
+
+if (!(Test-Path $ReportFolder)) {
+    New-Item -ItemType Directory -Path $ReportFolder | Out-Null
+}
+
+$Results | Export-Csv $ReportPath -NoTypeInformation
+
+Write-Host "Onboarding complete. Report saved to $ReportPath" -ForegroundColor Green
+
+Disconnect-MgGraph
