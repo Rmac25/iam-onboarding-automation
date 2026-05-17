@@ -1,0 +1,3 @@
+FirstName,LastName,UserPrincipalName,Department,JobTitle,Manager,Location
+John,Doe,john.doe@contoso.com,IT,Help Desk Analyst,jane.manager@contoso.com,Charlotte
+Mary,Smith,mary.smith@contoso.com,HR,HR Coordinator,jane.manager@contoso.com,Rock Hill
